@@ -18,7 +18,9 @@ Sites older than two years accumulate:
 - broken parent hierarchies  
 - terms belonging to taxonomies that no longer exist  
 - duplicated names and slugs  
-- general chaos  
+- general chaos
+
+- Do not at me, Im seriousss and you bloody know it.....
 
 This plugin audits all of it and gives you a clean report.  
 Then it hands you repair buttons where safe.
