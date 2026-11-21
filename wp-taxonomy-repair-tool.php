@@ -295,7 +295,7 @@ class WP_Taxonomy_Repair_Tool {
             );
 
             echo '<tr>';
-            echo '<td>' . $t->term_id . '</td>';
+            echo '<td>' . (int) $t->term_id . '</td>';
             echo '<td>' . esc_html( $t->name ) . '</td>';
             echo '<td>' . esc_html( $t->slug ) . '</td>';
             echo '<td><a href="' . esc_url( $delete_url ) . '" class="button">Delete</a></td>';
@@ -312,11 +312,25 @@ class WP_Taxonomy_Repair_Tool {
 
         check_admin_referer( 'wptax_delete_orphan' );
 
-        $term_id = (int) $_GET['term_id'];
+        global $wpdb;
 
-        wp_delete_term( $term_id, '' ); // Taxonomy doesn't matter because it has no term_tax rows.
+        $term_id = isset( $_GET['term_id'] ) ? absint( $_GET['term_id'] ) : 0;
 
-        wp_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
+        if ( $term_id ) {
+            // wp_delete_term() needs a taxonomy, and an orphan has none. Check it really is
+            // an orphan, then remove the row and any term meta directly.
+            $has_tax = (int) $wpdb->get_var(
+                $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_taxonomy WHERE term_id = %d", $term_id )
+            );
+
+            if ( 0 === $has_tax ) {
+                $wpdb->delete( $wpdb->termmeta, array( 'term_id' => $term_id ), array( '%d' ) );
+                $wpdb->delete( $wpdb->terms, array( 'term_id' => $term_id ), array( '%d' ) );
+                clean_term_cache( $term_id );
+            }
+        }
+
+        wp_safe_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
         exit;
     }
 
@@ -330,7 +344,7 @@ class WP_Taxonomy_Repair_Tool {
 
         foreach ( $audit['orphan_term_tax'] as $tx ) {
             echo '<tr>';
-            echo '<td>' . $tx->term_taxonomy_id . '</td>';
+            echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
             echo '<td>' . $tx->term_id . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
             echo '</tr>';
@@ -371,7 +385,7 @@ class WP_Taxonomy_Repair_Tool {
              WHERE tt.term_taxonomy_id IS NULL"
         );
 
-        wp_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
+        wp_safe_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
         exit;
     }
 
@@ -392,10 +406,10 @@ class WP_Taxonomy_Repair_Tool {
             );
 
             echo '<tr>';
-            echo '<td>' . $tx->term_taxonomy_id . '</td>';
+            echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
-            echo '<td>' . $row['stored'] . '</td>';
-            echo '<td>' . $row['real'] . '</td>';
+            echo '<td>' . (int) $row['stored'] . '</td>';
+            echo '<td>' . (int) $row['real'] . '</td>';
             echo '<td><a class="button" href="' . esc_url( $fix_url ) . '">Repair count</a></td>';
             echo '</tr>';
         }
@@ -412,7 +426,7 @@ class WP_Taxonomy_Repair_Tool {
 
         global $wpdb;
 
-        $tt_id = (int) $_GET['tt_id'];
+        $tt_id = isset( $_GET['tt_id'] ) ? absint( $_GET['tt_id'] ) : 0;
 
         // Recalc.
         $real_count = $wpdb->get_var(
@@ -430,7 +444,7 @@ class WP_Taxonomy_Repair_Tool {
             array( '%d' )
         );
 
-        wp_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
+        wp_safe_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
         exit;
     }
 
@@ -444,7 +458,7 @@ class WP_Taxonomy_Repair_Tool {
 
         foreach ( $audit['broken_parents'] as $tx ) {
             echo '<tr>';
-            echo '<td>' . $tx->term_taxonomy_id . '</td>';
+            echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
             echo '<td>' . $tx->term_id . '</td>';
             echo '<td>' . $tx->parent . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
@@ -465,7 +479,7 @@ class WP_Taxonomy_Repair_Tool {
 
         foreach ( $audit['unknown_taxonomies'] as $tx ) {
             echo '<tr>';
-            echo '<td>' . $tx->term_taxonomy_id . '</td>';
+            echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
             echo '<td>' . $tx->term_id . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
             echo '</tr>';

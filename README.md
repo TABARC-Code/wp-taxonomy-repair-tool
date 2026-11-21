@@ -20,7 +20,7 @@ Sites older than two years accumulate:
 - duplicated names and slugs  
 - general chaos
 
-- Do not at me, Im seriousss and you bloody know it.....
+- I'm serious.
 
 This plugin audits all of it and gives you a clean report.  
 Then it hands you repair buttons where safe.
