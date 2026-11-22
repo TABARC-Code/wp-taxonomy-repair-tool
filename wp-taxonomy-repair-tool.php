@@ -139,14 +139,12 @@ class WP_Taxonomy_Repair_Tool {
 
         $terms             = $wpdb->get_results( "SELECT * FROM $wpdb->terms" );
         $term_tax          = $wpdb->get_results( "SELECT * FROM $wpdb->term_taxonomy" );
-        $relationships     = $wpdb->get_results( "SELECT * FROM $wpdb->term_relationships" );
 
         $registered_tax    = get_taxonomies();
 
         $term_map          = array();
         $term_tax_map      = array();
         $term_tax_by_term  = array();
-        $relationships_map = array();
 
         foreach ( $terms as $t ) {
             $term_map[ $t->term_id ] = $t;
@@ -155,10 +153,6 @@ class WP_Taxonomy_Repair_Tool {
         foreach ( $term_tax as $tx ) {
             $term_tax_map[ $tx->term_taxonomy_id ] = $tx;
             $term_tax_by_term[ $tx->term_id ][] = $tx;
-        }
-
-        foreach ( $relationships as $rel ) {
-            $relationships_map[] = $rel;
         }
 
         // Orphaned terms
@@ -178,22 +172,23 @@ class WP_Taxonomy_Repair_Tool {
         }
 
         // Ghost relationships
-        $ghost = array();
-        foreach ( $relationships_map as $rel ) {
-            if ( ! isset( $term_tax_map[ $rel->term_taxonomy_id ] ) ) {
-                $ghost[] = $rel;
-            }
-        }
+        $ghost = $wpdb->get_results(
+            "SELECT tr.object_id, tr.term_taxonomy_id FROM $wpdb->term_relationships tr
+             LEFT JOIN $wpdb->term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             WHERE tt.term_taxonomy_id IS NULL"
+        );
 
         // Incorrect counts
         $incorrect_counts = array();
+        $count_rows       = $wpdb->get_results(
+            "SELECT term_taxonomy_id, COUNT(*) AS real_count FROM $wpdb->term_relationships GROUP BY term_taxonomy_id"
+        );
+        $real_counts      = array();
+        foreach ( $count_rows as $count_row ) {
+            $real_counts[ (int) $count_row->term_taxonomy_id ] = (int) $count_row->real_count;
+        }
         foreach ( $term_tax as $tx ) {
-            $real_count = $wpdb->get_var(
-                $wpdb->prepare(
-                    "SELECT COUNT(*) FROM $wpdb->term_relationships WHERE term_taxonomy_id = %d",
-                    $tx->term_taxonomy_id
-                )
-            );
+            $real_count = isset( $real_counts[ (int) $tx->term_taxonomy_id ] ) ? $real_counts[ (int) $tx->term_taxonomy_id ] : 0;
             if ( (int) $real_count !== (int) $tx->count ) {
                 $incorrect_counts[] = array(
                     'tx'        => $tx,
@@ -267,14 +262,14 @@ class WP_Taxonomy_Repair_Tool {
         ?>
         <table class="widefat striped" style="max-width:800px;">
             <tbody>
-                <tr><th>Orphan terms</th><td><?php echo count( $audit['orphan_terms'] ); ?></td></tr>
-                <tr><th>Orphan term taxonomy rows</th><td><?php echo count( $audit['orphan_term_tax'] ); ?></td></tr>
-                <tr><th>Ghost relationships</th><td><?php echo count( $audit['ghost_relationships'] ); ?></td></tr>
-                <tr><th>Incorrect counts</th><td><?php echo count( $audit['incorrect_counts'] ); ?></td></tr>
-                <tr><th>Broken parent chains</th><td><?php echo count( $audit['broken_parents'] ); ?></td></tr>
-                <tr><th>Terms in unregistered taxonomies</th><td><?php echo count( $audit['unknown_taxonomies'] ); ?></td></tr>
-                <tr><th>Duplicate names</th><td><?php echo count( $audit['duplicate_names'] ); ?></td></tr>
-                <tr><th>Duplicate slugs</th><td><?php echo count( $audit['duplicate_slugs'] ); ?></td></tr>
+                <tr><th>Orphan terms</th><td><?php echo (int) count( $audit['orphan_terms'] ); ?></td></tr>
+                <tr><th>Orphan term taxonomy rows</th><td><?php echo (int) count( $audit['orphan_term_tax'] ); ?></td></tr>
+                <tr><th>Ghost relationships</th><td><?php echo (int) count( $audit['ghost_relationships'] ); ?></td></tr>
+                <tr><th>Incorrect counts</th><td><?php echo (int) count( $audit['incorrect_counts'] ); ?></td></tr>
+                <tr><th>Broken parent chains</th><td><?php echo (int) count( $audit['broken_parents'] ); ?></td></tr>
+                <tr><th>Terms in unregistered taxonomies</th><td><?php echo (int) count( $audit['unknown_taxonomies'] ); ?></td></tr>
+                <tr><th>Duplicate names</th><td><?php echo (int) count( $audit['duplicate_names'] ); ?></td></tr>
+                <tr><th>Duplicate slugs</th><td><?php echo (int) count( $audit['duplicate_slugs'] ); ?></td></tr>
             </tbody>
         </table>
         <?php
@@ -291,14 +286,14 @@ class WP_Taxonomy_Repair_Tool {
         foreach ( $audit['orphan_terms'] as $t ) {
             $delete_url = wp_nonce_url(
                 admin_url( 'admin-post.php?action=wptax_delete_orphan&term_id=' . $t->term_id ),
-                'wptax_delete_orphan'
+                'wptax_delete_orphan_' . (int) $t->term_id
             );
 
             echo '<tr>';
             echo '<td>' . (int) $t->term_id . '</td>';
             echo '<td>' . esc_html( $t->name ) . '</td>';
             echo '<td>' . esc_html( $t->slug ) . '</td>';
-            echo '<td><a href="' . esc_url( $delete_url ) . '" class="button">Delete</a></td>';
+            echo '<td><a href="' . esc_url( $delete_url ) . '" class="button" onclick="return confirm(' . esc_attr( wp_json_encode( 'Delete this orphaned term? This cannot be undone.' ) ) . ');">Delete</a></td>';
             echo '</tr>';
         }
 
@@ -310,11 +305,11 @@ class WP_Taxonomy_Repair_Tool {
             wp_die( 'No.' );
         }
 
-        check_admin_referer( 'wptax_delete_orphan' );
-
         global $wpdb;
 
-        $term_id = isset( $_GET['term_id'] ) ? absint( $_GET['term_id'] ) : 0;
+        $term_id = isset( $_GET['term_id'] ) ? absint( wp_unslash( $_GET['term_id'] ) ) : 0;
+
+        check_admin_referer( 'wptax_delete_orphan_' . $term_id );
 
         if ( $term_id ) {
             // wp_delete_term() needs a taxonomy, and an orphan has none. Check it really is
@@ -345,7 +340,7 @@ class WP_Taxonomy_Repair_Tool {
         foreach ( $audit['orphan_term_tax'] as $tx ) {
             echo '<tr>';
             echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
-            echo '<td>' . $tx->term_id . '</td>';
+            echo '<td>' . (int) $tx->term_id . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
             echo '</tr>';
         }
@@ -365,8 +360,8 @@ class WP_Taxonomy_Repair_Tool {
             'wptax_delete_ghost_relationships'
         );
 
-        echo '<p>' . count( $audit['ghost_relationships'] ) . ' ghost relationships found.</p>';
-        echo '<a class="button" href="' . esc_url( $delete_url ) . '">Delete ghost relationships</a>';
+        echo '<p>' . (int) count( $audit['ghost_relationships'] ) . ' ghost relationships found.</p>';
+        echo '<a class="button" href="' . esc_url( $delete_url ) . '" onclick="return confirm(' . esc_attr( wp_json_encode( 'Delete all ghost relationships? This cannot be undone.' ) ) . ');">Delete ghost relationships</a>';
     }
 
     public function handle_delete_ghost_relationships() {
@@ -402,7 +397,7 @@ class WP_Taxonomy_Repair_Tool {
 
             $fix_url = wp_nonce_url(
                 admin_url( 'admin-post.php?action=wptax_fix_count&tt_id=' . $tx->term_taxonomy_id ),
-                'wptax_fix_count'
+                'wptax_fix_count_' . (int) $tx->term_taxonomy_id
             );
 
             echo '<tr>';
@@ -422,27 +417,37 @@ class WP_Taxonomy_Repair_Tool {
             wp_die( 'No.' );
         }
 
-        check_admin_referer( 'wptax_fix_count' );
-
         global $wpdb;
 
-        $tt_id = isset( $_GET['tt_id'] ) ? absint( $_GET['tt_id'] ) : 0;
+        $tt_id = isset( $_GET['tt_id'] ) ? absint( wp_unslash( $_GET['tt_id'] ) ) : 0;
 
-        // Recalc.
-        $real_count = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(*) FROM $wpdb->term_relationships WHERE term_taxonomy_id = %d",
-                $tt_id
-            )
-        );
+        check_admin_referer( 'wptax_fix_count_' . $tt_id );
 
-        $wpdb->update(
-            $wpdb->term_taxonomy,
-            array( 'count' => $real_count ),
-            array( 'term_taxonomy_id' => $tt_id ),
-            array( '%d' ),
-            array( '%d' )
-        );
+        $taxonomy = $tt_id ? $wpdb->get_var(
+            $wpdb->prepare( "SELECT taxonomy FROM $wpdb->term_taxonomy WHERE term_taxonomy_id = %d", $tt_id )
+        ) : null;
+
+        if ( $taxonomy ) {
+            if ( taxonomy_exists( $taxonomy ) ) {
+                // Let the taxonomy's own count callback decide what counts (published posts only, etc).
+                wp_update_term_count_now( array( $tt_id ), $taxonomy );
+            } else {
+                $real_count = (int) $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT COUNT(*) FROM $wpdb->term_relationships WHERE term_taxonomy_id = %d",
+                        $tt_id
+                    )
+                );
+
+                $wpdb->update(
+                    $wpdb->term_taxonomy,
+                    array( 'count' => $real_count ),
+                    array( 'term_taxonomy_id' => $tt_id ),
+                    array( '%d' ),
+                    array( '%d' )
+                );
+            }
+        }
 
         wp_safe_redirect( admin_url( 'tools.php?page=' . $this->screen_slug ) );
         exit;
@@ -459,8 +464,8 @@ class WP_Taxonomy_Repair_Tool {
         foreach ( $audit['broken_parents'] as $tx ) {
             echo '<tr>';
             echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
-            echo '<td>' . $tx->term_id . '</td>';
-            echo '<td>' . $tx->parent . '</td>';
+            echo '<td>' . (int) $tx->term_id . '</td>';
+            echo '<td>' . (int) $tx->parent . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
             echo '</tr>';
         }
@@ -480,7 +485,7 @@ class WP_Taxonomy_Repair_Tool {
         foreach ( $audit['unknown_taxonomies'] as $tx ) {
             echo '<tr>';
             echo '<td>' . (int) $tx->term_taxonomy_id . '</td>';
-            echo '<td>' . $tx->term_id . '</td>';
+            echo '<td>' . (int) $tx->term_id . '</td>';
             echo '<td>' . esc_html( $tx->taxonomy ) . '</td>';
             echo '</tr>';
         }
@@ -500,7 +505,7 @@ class WP_Taxonomy_Repair_Tool {
             foreach ( $audit['duplicate_names'] as $group ) {
                 $name = $group[0]->name;
                 $ids = wp_list_pluck( $group, 'term_id' );
-                echo '<tr><td>' . esc_html( $name ) . '</td><td>' . implode( ', ', $ids ) . '</td></tr>';
+                echo '<tr><td>' . esc_html( $name ) . '</td><td>' . implode( ', ', array_map( 'absint', $ids ) ) . '</td></tr>';
             }
             echo '</tbody></table>';
         }
@@ -515,7 +520,7 @@ class WP_Taxonomy_Repair_Tool {
             foreach ( $audit['duplicate_slugs'] as $group ) {
                 $slug = $group[0]->slug;
                 $ids = wp_list_pluck( $group, 'term_id' );
-                echo '<tr><td>' . esc_html( $slug ) . '</td><td>' . implode( ', ', $ids ) . '</td></tr>';
+                echo '<tr><td>' . esc_html( $slug ) . '</td><td>' . implode( ', ', array_map( 'absint', $ids ) ) . '</td></tr>';
             }
             echo '</tbody></table>';
         }
